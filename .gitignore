@@ -1,0 +1,26 @@
+# -------------------------------
+# Python
+# -------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.env
+*.venv
+env/
+venv/
+*.swp
+*.swo
+
+# -------------------------------
+# Jupyter Notebooks
+# -------------------------------
+.ipynb_checkpoints
+
+# -------------------------------
+# Virtual Environment / IDE
+# -------------------------------
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
