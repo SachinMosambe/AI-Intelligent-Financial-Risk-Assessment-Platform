@@ -1,191 +1,137 @@
-# app_s3_mlflow_fast.py
-# EMIPredict AI - API-based lightweight client for Streamlit Cloud
+# app_fast_final.py
+"""
+EMIPredict AI - Final Fast Version (Modern Dashboard UI - Option A)
+Features:
+- Instant UI load (lazy loading of heavy resources)
+- Enhanced Data Explorer with rich, explanatory visualizations
+- Model Comparison dashboard using MLflow metadata
+- Prediction pages using proxied model endpoints (cached)
+- Clean, modular structure for easy editing
+
+Notes:
+- Update MLFLOW_TRACKING_URI, CLASSIFICATION_URL, REGRESSION_URL, and S3_CSV_URL as needed
+- For local dev, create .streamlit/secrets.toml or rely on defaults
+"""
+
 import streamlit as st
 import pandas as pd
 import numpy as np
-import joblib
-import plotly.graph_objects as go
-import mlflow
-from mlflow.tracking import MlflowClient
-import os
-import warnings
-import hashlib
-from pathlib import Path
-from io import BytesIO
-import time
 import requests
+import joblib
+import time
+from io import BytesIO
+from pathlib import Path
+from mlflow.tracking import MlflowClient
+import warnings
+import plotly.express as px
+import plotly.graph_objects as go
 
 warnings.filterwarnings("ignore")
 
 # -------------------------
-# CONFIG
+# CONFIG (change if needed)
 # -------------------------
-MLFLOW_TRACKING_URI = "http://13.204.193.251:5000"
-mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-
+MLFLOW_TRACKING_URI = st.secrets.get("MLFLOW_TRACKING_URI", "http://13.204.193.251:5000")
+CLASSIFICATION_URL = st.secrets.get("CLASSIFICATION_URL", "http://13.204.193.251:9001/invocations")
+REGRESSION_URL = st.secrets.get("REGRESSION_URL", "http://13.204.193.251:9002/invocations")
 CLASSIFICATION_MODEL_NAME = "EMI_Classification_XGBoost"
 REGRESSION_MODEL_NAME = "EMI_Regression_XGBoost"
+S3_CSV_URL = st.secrets.get("S3_CSV_URL", "https://mlflow-tracking-loan.s3.amazonaws.com/data/clean_emi_data.csv")
+CACHE_DIR = Path(".cache_fast_app")
+CACHE_DIR.mkdir(exist_ok=True)
 
-# -------------------------
-# GLOBAL DUMMY RECORD (VALID FULL-SCHEMA health-check)
-# -------------------------
-# Keep this as a global constant so it's easy to update when schema changes.
+# Dummy record for endpoint health checks
 DUMMY_RECORD = {
-    "age": 25,
-    "gender": "Male",
-    "marital_status": "Single",
-    "education": "Graduate",
-    "monthly_salary": 0.0,
-    "employment_type": "Private",
-    "years_of_employment": 0.0,
-    "company_type": "Small",
-    "house_type": "Rented",
-    "monthly_rent": 0.0,
-    "family_size": 1.0,
-    "dependents": 0.0,
-    "school_fees": 0.0,
-    "college_fees": 0.0,
-    "travel_expenses": 0.0,
-    "groceries_utilities": 0.0,
-    "other_monthly_expenses": 0.0,
-    "existing_loans": "No",
-    "current_emi_amount": 0.0,
-    "credit_score": 700.0,
-    "bank_balance": 0.0,
-    "emergency_fund": 0.0,
-    "emi_scenario": "Personal Loan EMI",
-    "requested_amount": 10000.0,
-    "requested_tenure": 3.0
+    "age": 30, "gender": "Male", "marital_status": "Single", "education": "Graduate",
+    "monthly_salary": 40000.0, "employment_type": "Private", "years_of_employment": 5.0,
+    "company_type": "Medium", "house_type": "Rented", "monthly_rent": 0.0,
+    "family_size": 3.0, "dependents": 1.0, "school_fees": 0.0, "college_fees": 0.0,
+    "travel_expenses": 2000.0, "groceries_utilities": 8000.0, "other_monthly_expenses": 1000.0,
+    "existing_loans": "No", "current_emi_amount": 0.0, "credit_score": 700.0,
+    "bank_balance": 50000.0, "emergency_fund": 15000.0, "emi_scenario": "Personal Loan EMI",
+    "requested_amount": 100000.0, "requested_tenure": 12.0
 }
 
 # -------------------------
-# SAFE SECRET FETCHING
+# UTILITIES (cached session)
 # -------------------------
-def get_secret(key, default):
-    try:
-        return st.secrets[key]
-    except Exception:
-        return default
-
-CLASSIFICATION_URL = get_secret("CLASSIFICATION_URL", "http://13.204.193.251:9001/invocations")
-REGRESSION_URL     = get_secret("REGRESSION_URL",     "http://13.204.193.251:9002/invocations")
+@st.cache_resource
+def requests_session():
+    s = requests.Session()
+    s.headers.update({"User-Agent": "EMIPredictAI/fast-v1"})
+    return s
 
 # -------------------------
-# DATA LOCATION (S3 public object)
+# STYLING (modern dashboard)
 # -------------------------
-S3_BUCKET = get_secret("S3_BUCKET", "mlflow-tracking-loan")
-S3_KEY    = get_secret("S3_KEY", "data/clean_emi_data.csv")
-DATA_PATH = get_secret("DATA_PATH", f"https://{S3_BUCKET}.s3.amazonaws.com/{S3_KEY}")
+@st.cache_resource
+def apply_css():
+    css = r"""
+    <style>
+    :root{--primary:#1f77b4;--accent:#764ba2}
+    #MainMenu{visibility:hidden} footer{visibility:hidden}
+    .card{background:#fff;border-radius:12px;padding:16px;box-shadow:0 6px 18px rgba(15,23,42,0.06);}
+    .kpi{font-size:18px;font-weight:700}
+    .muted{color:#6b7280}
+    </style>
+    """
+    st.markdown(css, unsafe_allow_html=True)
 
-# Local cache directories
-MODEL_CACHE_DIR = "model_cache"
-os.makedirs(MODEL_CACHE_DIR, exist_ok=True)
-
-# -------------------------
-# OPTIMIZED CACHING FUNCTIONS
-# -------------------------
-def get_model_hash(model_name, version):
-    return hashlib.md5(f"{model_name}_{version}".encode()).hexdigest()
-
-def get_latest_model_version(model_name):
-    try:
-        client = MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
-        for stage in ["Production", "Staging", "None"]:
-            versions = client.get_latest_versions(model_name, stages=[stage])
-            if versions:
-                return versions[0]
-        all_versions = client.search_model_versions(f"name='{model_name}'")
-        if all_versions:
-            return max(all_versions, key=lambda x: int(x.version))
-        return None
-    except Exception:
-        return None
-
-def check_cache_validity(cache_path, model_version):
-    if not cache_path.exists():
-        return False
-    version_file = cache_path.parent / f"{cache_path.stem}_version.txt"
-    if version_file.exists():
-        with open(version_file, 'r') as f:
-            cached_version = f.read().strip()
-            return cached_version == str(model_version.version)
-    return False
-
-def save_cache_version(cache_path, model_version):
-    version_file = cache_path.parent / f"{cache_path.stem}_version.txt"
-    with open(version_file, 'w') as f:
-        f.write(str(model_version.version))
+apply_css()
 
 # -------------------------
-# MODEL PROXY (calls MLflow serving endpoints)
+# MODEL PROXY (lightweight + cached)
 # -------------------------
 class ModelProxy:
-    """
-    Reliable proxy that:
-     - checks MLflow health via GET /ping (preferred)
-     - falls back to sending a valid full-schema dummy record
-     - posts predictions as {'inputs': [dicts]}
-    """
-    def __init__(self, url, timeout=10):
+    def __init__(self, url, timeout=8):
         self.url = url.rstrip('/')
         self.timeout = timeout
+        self.session = requests_session()
         self.ready = False
         self.last_error = None
-        self._check_ready()
+        self._checked = False
 
-    def _check_ready(self):
-        # Try GET /ping first
+    def _health_check(self):
+        if self._checked:
+            return self.ready
+        self._checked = True
+        # try GET /ping
         try:
-            ping_url = self.url.replace("/invocations", "/ping")
-            if not ping_url.endswith("/ping"):
-                ping_url = self.url + "/ping"
-            r = requests.get(ping_url, timeout=self.timeout)
+            ping = self.url.replace('/invocations', '/ping')
+            r = self.session.get(ping, timeout=min(2, self.timeout))
             if r.status_code == 200:
                 self.ready = True
-                return
+                return True
         except Exception:
-            # ping may not be available or reachable; fall through to dummy POST
             pass
-
-        # Fallback: valid dummy POST with full schema
+        # fallback: short dummy POST
         try:
-            payload = {"inputs": [DUMMY_RECORD]}
-            r2 = requests.post(self.url, json=payload, timeout=self.timeout)
-            if r2.status_code == 200:
+            r = self.session.post(self.url, json={"inputs": [DUMMY_RECORD]}, timeout=min(4, self.timeout))
+            if r.status_code == 200:
                 self.ready = True
-                return
-            else:
-                self.ready = False
-                self.last_error = f"Status {r2.status_code} - {r2.text}"
+                return True
+            self.last_error = f"Status {r.status_code}"
         except Exception as e:
-            self.ready = False
             self.last_error = str(e)
+        return self.ready
+
+    def ensure_ready(self):
+        return self._health_check()
 
     def predict(self, df_or_records):
-        try:
-            if isinstance(df_or_records, pd.DataFrame):
-                payload = {"inputs": df_or_records.to_dict(orient="records")}
-            elif isinstance(df_or_records, dict):
-                payload = {"inputs": [df_or_records]}
-            elif isinstance(df_or_records, (list, tuple)):
-                payload = {"inputs": list(df_or_records)}
-            else:
-                raise ValueError("Unsupported input format for predict()")
-
-            r = requests.post(self.url, json=payload, timeout=self.timeout)
-            r.raise_for_status()
-            result = r.json()
-
-            preds = result.get("predictions", None)
-            if preds is None:
-                if isinstance(result, list):
-                    preds = result
-                else:
-                    return np.array([])
-            return np.array(preds)
-        except Exception as e:
-            self.last_error = str(e)
-            raise
+        if isinstance(df_or_records, pd.DataFrame):
+            payload = {"inputs": df_or_records.to_dict(orient='records')}
+        elif isinstance(df_or_records, (list, tuple)):
+            payload = {"inputs": list(df_or_records)}
+        elif isinstance(df_or_records, dict):
+            payload = {"inputs": [df_or_records]}
+        else:
+            raise ValueError("Unsupported input for predict")
+        r = self.session.post(self.url, json=payload, timeout=self.timeout)
+        r.raise_for_status()
+        res = r.json()
+        preds = res.get('predictions') if isinstance(res, dict) else res
+        return np.array(preds)
 
     def predict_proba(self, df_or_records):
         preds = self.predict(df_or_records)
@@ -193,485 +139,357 @@ class ModelProxy:
             return preds
         raise ValueError("Server did not return probability vector")
 
-# -------------------------
-# LOADING PROXIES (lightweight)
-# -------------------------
-@st.cache_resource(show_spinner=False)
-def load_classification_proxy():
-    try:
-        proxy = ModelProxy(CLASSIFICATION_URL, timeout=20)
-        return proxy
-    except Exception:
-        return None
+@st.cache_resource
+def get_class_proxy():
+    return ModelProxy(CLASSIFICATION_URL)
 
-@st.cache_resource(show_spinner=False)
-def load_regression_proxy():
-    try:
-        proxy = ModelProxy(REGRESSION_URL, timeout=20)
-        return proxy
-    except Exception:
-        return None
+@st.cache_resource
+def get_reg_proxy():
+    return ModelProxy(REGRESSION_URL)
 
-@st.cache_resource(show_spinner=False)
-def load_label_encoder_fast():
+# -------------------------
+# MLflow helpers (lazy, cached)
+# -------------------------
+@st.cache_data(ttl=600)
+def fetch_mlflow_metadata(limit=5):
+    result = {"clf_versions": [], "reg_versions": [], "ok": False, "error": None}
     try:
-        clf_version = get_latest_model_version(CLASSIFICATION_MODEL_NAME)
-        if clf_version is None:
-            return None
-        cache_path = Path(MODEL_CACHE_DIR) / f"label_encoder_v{clf_version.version}.pkl"
-        if cache_path.exists():
-            return joblib.load(cache_path)
         client = MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
         try:
-            artifacts = client.list_artifacts(clf_version.run_id)
-            for artifact in artifacts:
-                if "label_encoder" in artifact.path.lower() and artifact.path.endswith(".pkl"):
-                    local_path = client.download_artifacts(clf_version.run_id, artifact.path, dst_path=MODEL_CACHE_DIR)
-                    encoder = joblib.load(local_path)
-                    joblib.dump(encoder, cache_path)
-                    return encoder
+            clf_versions = client.search_model_versions(f"name='{CLASSIFICATION_MODEL_NAME}'")
+            for v in clf_versions[:limit]:
+                run = client.get_run(v.run_id)
+                result['clf_versions'].append({
+                    'version': v.version, 'stage': v.current_stage,
+                    'metrics': dict(run.data.metrics), 'run_id': v.run_id
+                })
         except Exception:
             pass
-        return None
-    except Exception:
-        return None
+        try:
+            reg_versions = client.search_model_versions(f"name='{REGRESSION_MODEL_NAME}'")
+            for v in reg_versions[:limit]:
+                run = client.get_run(v.run_id)
+                result['reg_versions'].append({
+                    'version': v.version, 'stage': v.current_stage,
+                    'metrics': dict(run.data.metrics), 'run_id': v.run_id
+                })
+        except Exception:
+            pass
+        result['ok'] = True
+    except Exception as e:
+        result['error'] = str(e)
+    return result
 
-# -------------------------
-# METADATA LOADING (INSTANT)
-# -------------------------
-@st.cache_data(ttl=3600, show_spinner=False)
-def load_model_metadata():
-    result = {
-        "clf_meta": None,
-        "reg_meta": None,
-        "clf_metrics": {},
-        "reg_metrics": {},
-        "ok": False,
-        "message": ""
-    }
+@st.cache_resource
+def load_label_encoder_from_mlflow():
     try:
         client = MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
-
-        clf_version = get_latest_model_version(CLASSIFICATION_MODEL_NAME)
-        if clf_version:
-            result["clf_meta"] = {
-                "model_name": CLASSIFICATION_MODEL_NAME,
-                "version": clf_version.version,
-                "run_id": clf_version.run_id,
-                "stage": clf_version.current_stage,
-            }
-            try:
-                run = client.get_run(clf_version.run_id)
-                result["clf_metrics"] = dict(run.data.metrics)
-            except Exception:
-                pass
-
-        reg_version = get_latest_model_version(REGRESSION_MODEL_NAME)
-        if reg_version:
-            result["reg_meta"] = {
-                "model_name": REGRESSION_MODEL_NAME,
-                "version": reg_version.version,
-                "run_id": reg_version.run_id,
-                "stage": reg_version.current_stage,
-            }
-            try:
-                run = client.get_run(reg_version.run_id)
-                result["reg_metrics"] = dict(run.data.metrics)
-            except Exception:
-                pass
-
-        result["ok"] = True
-        result["message"] = "✅ Connected"
-        return result
-    except Exception as e:
-        result["message"] = f"❌ Failed: {str(e)}"
-        return result
+        versions = client.search_model_versions(f"name='{CLASSIFICATION_MODEL_NAME}'")
+        if not versions:
+            return None
+        latest = max(versions, key=lambda x: int(x.version))
+        artifacts = client.list_artifacts(latest.run_id)
+        for a in artifacts:
+            if 'label_encoder' in a.path.lower() and a.path.endswith('.pkl'):
+                local = client.download_artifacts(latest.run_id, a.path, dst_path=str(CACHE_DIR))
+                return joblib.load(local)
+    except Exception:
+        return None
+    return None
 
 # -------------------------
-# DATA LOADING
+# Data loader (deferred)
 # -------------------------
-@st.cache_data(show_spinner=False)
-def load_data(path=DATA_PATH, timeout=60):
-    try:
-        if isinstance(path, str) and path.startswith("http"):
-            with requests.get(path, stream=True, timeout=timeout) as r:
-                r.raise_for_status()
-                buffer = BytesIO()
-                for chunk in r.iter_content(chunk_size=1024 * 1024):
-                    if chunk:
-                        buffer.write(chunk)
-                buffer.seek(0)
-                df = pd.read_csv(buffer)
-        else:
-            if not os.path.exists(path):
-                return None, False, f"❌ File not found"
-            df = pd.read_csv(path)
-        return df, True, f"✅ {len(df):,} records"
-    except Exception as e:
-        return None, False, f"❌ Error: {str(e)}"
+@st.cache_data(ttl=3600)
+def load_csv_from_url(url: str, timeout=60):
+    session = requests_session()
+    r = session.get(url, stream=True, timeout=timeout)
+    r.raise_for_status()
+    buf = BytesIO()
+    for chunk in r.iter_content(1024 * 1024):
+        if chunk:
+            buf.write(chunk)
+    buf.seek(0)
+    df = pd.read_csv(buf)
+    return df
 
 # -------------------------
-# APP CONFIGURATION
+# APP CONFIG
 # -------------------------
-st.set_page_config(
-    page_title="EMIPredict AI",
-    page_icon="💰",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="EMIPredict AI — Fast", page_icon="💰", layout="wide")
 
-st.markdown("""
-<style>
-    .stAlert > div { padding: 0.5rem 1rem; }
-    .metric-row { background-color: #f0f2f6; padding: 1rem; border-radius: 0.5rem; }
-</style>
-""", unsafe_allow_html=True)
+# placeholders in session state
+if 'df' not in st.session_state:
+    st.session_state['df'] = None
+if 'mlflow_meta' not in st.session_state:
+    st.session_state['mlflow_meta'] = None
+if 'label_encoder' not in st.session_state:
+    st.session_state['label_encoder'] = None
 
-# -------------------------
-# PRELOAD EVERYTHING AT STARTUP
-# -------------------------
+# Sidebar
 st.sidebar.title("💰 EMIPredict AI")
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 🚀 Initialization")
-
-metadata = load_model_metadata()
-if metadata["ok"]:
-    st.sidebar.success("✅ MLflow connected")
-else:
-    st.sidebar.error("❌ Connection failed")
-
-df, data_ok, data_msg = load_data()
-if data_ok:
-    st.sidebar.success(f"✅ Data loaded")
-else:
-    st.sidebar.warning("⚠️ No data")
-
-st.sidebar.markdown("### 📦 Connecting to Model Serving Endpoints (no heavy loads)")
-
-clf_model = None
-reg_model = None
-label_encoder = None
-
-with st.spinner("Connecting to classification endpoint..."):
-    try:
-        clf_model = load_classification_proxy()
-        if clf_model and clf_model.ready:
-            st.sidebar.success("✅ Classification endpoint reachable")
-        else:
-            st.sidebar.warning(f"⚠️ Classification endpoint not ready: {getattr(clf_model,'last_error', 'unknown')}")
-    except Exception as e:
-        st.sidebar.error(f"❌ Classification proxy failed: {e}")
-        clf_model = None
-
-with st.spinner("Connecting to regression endpoint..."):
-    try:
-        reg_model = load_regression_proxy()
-        if reg_model and reg_model.ready:
-            st.sidebar.success("✅ Regression endpoint reachable")
-        else:
-            st.sidebar.warning(f"⚠️ Regression endpoint not ready: {getattr(reg_model,'last_error', 'unknown')}")
-    except Exception as e:
-        st.sidebar.error(f"❌ Regression proxy failed: {e}")
-        reg_model = None
-
-label_encoder = load_label_encoder_fast()
-
-if clf_model and reg_model and clf_model.ready and reg_model.ready:
-    st.sidebar.success("🎉 All models ready via API!")
-else:
-    st.sidebar.warning("⚠️ Some models not reachable. Predictions will attempt API calls and show errors if unavailable.")
-
+st.sidebar.markdown("Modern Dashboard — Fast, lazy-loaded")
+page = st.sidebar.radio("Navigation", ["Home", "Predictions", "Data Explorer", "Model Comparison", "System"], index=0)
 st.sidebar.markdown("---")
 
-page = st.sidebar.radio(
-    "📑 Navigation",
-    ["🏠 Home", "🔮 Predictions", "📊 Data Explorer", "📈 Model Performance", "🔧 System Info"]
-)
+# Top quick status (non-blocking)
+col_s1, col_s2 = st.sidebar.columns(2)
+col_s1.markdown("**MLflow**")
+col_s2.markdown("**Endpoints**")
 
-st.sidebar.markdown("---")
-
-if data_ok:
-    st.sidebar.metric("📊 Records", f"{len(df):,}")
-    st.sidebar.metric("📋 Features", len(df.columns))
-
-st.sidebar.markdown("---")
-st.sidebar.caption(f"🔗 MLflow: {MLFLOW_TRACKING_URI}")
-
-# -------------------------
-# HOME PAGE
-# -------------------------
-if page == "🏠 Home":
+# Basic home
+if page == "Home":
     st.title("💰 EMIPredict AI")
-    st.markdown("### Intelligent Financial Risk Assessment")
-
-    col1, col2 = st.columns([1, 1])
-    with col1:
+    st.markdown("### Fast Modern Dashboard")
+    c1, c2, c3 = st.columns([2,1,1])
+    with c1:
         st.markdown("""
-        ### 🎯 Features
-        - **EMI Eligibility Classification**
-        - **Maximum EMI Prediction**
-        - **Interactive Analytics**
-        - **Real-time Predictions**
-
-        ### ⚡ Performance
-        - **Models served from EC2 (no heavy loading in Streamlit)**
-        - **Instant predictions (no wait)**
-        - **Smart proxy-based architecture**
-        - **S3-backed storage**
+        **What this app does**
+        - Predict EMI eligibility (classification) and maximum EMI (regression) via remote model serving.
+        - Interactive Data Explorer with rich visualizations.
+        - Model Comparison dashboard powered by MLflow metadata.
         """)
-    with col2:
-        st.markdown("### 📊 System Status")
-        if clf_model and clf_model.ready:
-            st.success("✅ **Classification Endpoint Ready**")
-            if metadata.get("clf_meta"):
-                st.caption(f"Model: {metadata['clf_meta']['model_name']} | v{metadata['clf_meta']['version']}")
-        else:
-            st.error("❌ Classification endpoint not ready")
-        if reg_model and reg_model.ready:
-            st.success("✅ **Regression Endpoint Ready**")
-            if metadata.get("reg_meta"):
-                st.caption(f"Model: {metadata['reg_meta']['model_name']} | v{metadata['reg_meta']['version']}")
-        else:
-            st.error("❌ Regression endpoint not ready")
-        if data_ok:
-            st.success(f"✅ **{data_msg}**")
-
-# -------------------------
-# PREDICTIONS PAGE (API-based)
-# -------------------------
-elif page == "🔮 Predictions":
-    st.title("🔮 Real-Time EMI Predictions")
-
-    if not (clf_model and reg_model):
-        st.error("❌ Model endpoints not configured. Please ensure MLflow serving is running on EC2.")
-        st.stop()
-
-    st.success("⚡ Models proxied - predictions will use remote serving endpoints!")
-
-    pred_type = st.radio(
-        "Select Prediction Type",
-        ["Classification (EMI Eligibility)", "Regression (Maximum EMI Amount)"],
-        horizontal=True
-    )
-    st.markdown("---")
-
-    with st.form("prediction_form"):
-        st.markdown("### 📝 Customer Information")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.markdown("**👤 Personal Details**")
-            age = st.number_input("Age", 18, 80, 30)
-            gender = st.selectbox("Gender", ["Male", "Female"])
-            marital_status = st.selectbox("Marital Status", ["Single", "Married"])
-            education = st.selectbox("Education", ["High School", "Graduate", "Professional", "Post Graduate"])
-            family_size = st.number_input("Family Size", 1, 10, 3)
-            dependents = st.number_input("Dependents", 0, 10, 1)
-        with col2:
-            st.markdown("**💼 Employment Details**")
-            monthly_salary = st.number_input("Monthly Salary (₹)", 5000, 500000, 50000, step=1000)
-            employment_type = st.selectbox("Employment Type", ["Private", "Government", "Self-employed"])
-            years_of_employment = st.number_input("Years of Employment", 0, 50, 5)
-            company_type = st.selectbox("Company Type", ["MNC", "Large", "Medium", "Small", "Startup"])
-            house_type = st.selectbox("House Type", ["Own", "Rented", "Family"])
-            monthly_rent = st.number_input("Monthly Rent (₹)", 0, 100000, 0)
-        with col3:
-            st.markdown("**💰 Financial Details**")
-            school_fees = st.number_input("School Fees (₹)", 0, 100000, 0)
-            college_fees = st.number_input("College Fees (₹)", 0, 200000, 0)
-            travel_expenses = st.number_input("Travel Expenses (₹)", 0, 50000, 3000)
-            groceries_utilities = st.number_input("Groceries (₹)", 0, 50000, 8000)
-            other_monthly_expenses = st.number_input("Other Expenses (₹)", 0, 50000, 2000)
-            existing_loans = st.selectbox("Existing Loans", ["No", "Yes"])
-            current_emi_amount = st.number_input("Current EMI (₹)", 0, 100000, 0)
-            credit_score = st.number_input("Credit Score", 300, 850, 700)
-            bank_balance = st.number_input("Bank Balance (₹)", 0, 2000000, 50000)
-            emergency_fund = st.number_input("Emergency Fund (₹)", 0, 500000, 10000)
-
         st.markdown("---")
-        col1, col2 = st.columns(2)
-        with col1:
-            if data_ok and 'emi_scenario' in df.columns:
-                emi_scenario = st.selectbox("EMI Scenario", df['emi_scenario'].unique())
-            else:
-                emi_scenario = st.selectbox("EMI Scenario", ["E-commerce Shopping EMI", "Home Appliances EMI", "Vehicle EMI", "Personal Loan EMI", "Education EMI"])
-        with col2:
-            requested_amount = st.number_input("Requested Loan Amount (₹)", 10000, 5000000, 100000, step=10000)
-            requested_tenure = st.number_input("Requested Tenure (months)", 3, 120, 12)
+        st.markdown("### Quick Actions")
+        if st.button("Open Predictions"):
+            st.experimental_set_query_params(page='predictions')
+            st.experimental_rerun()
+    with c2:
+        st.metric("Models Deployed", "2")
+        st.markdown("Learn more in Model Comparison")
+    with c3:
+        st.metric("Dataset", "Not loaded", delta="Click Data Explorer")
 
-        submitted = st.form_submit_button("⚡ Generate Prediction (Instant!)", type="primary", use_container_width=True)
+# -------------------------
+# PREDICTIONS (lazy load proxies + data if needed)
+# -------------------------
+elif page == "Predictions":
+    st.title("🔮 Predictions")
+    # Lazy create proxies
+    clf_proxy = get_class_proxy()
+    reg_proxy = get_reg_proxy()
+
+    # health status
+    status_col1, status_col2, status_col3 = st.columns(3)
+    status_col1.metric("Classification", "Ready" if clf_proxy.ensure_ready() else "Not Ready")
+    status_col2.metric("Regression", "Ready" if reg_proxy.ensure_ready() else "Not Ready")
+    if clf_proxy.last_error:
+        status_col1.caption(clf_proxy.last_error)
+
+    # load small portion of dataset if not present (for selecting emi_scenario options)
+    if st.session_state['df'] is None:
+        try:
+            # load only headers or small sample by requesting range? fallback to full load
+            st.session_state['df'] = None
+        except Exception:
+            st.session_state['df'] = None
+
+    with st.form('predict_form'):
+        st.markdown('### Customer Info')
+        cols = st.columns(3)
+        with cols[0]:
+            age = st.number_input('Age', 18, 80, 30)
+            gender = st.selectbox('Gender', ['Male','Female'])
+            marital_status = st.selectbox('Marital Status', ['Single','Married'])
+        with cols[1]:
+            monthly_salary = st.number_input('Monthly Salary (₹)', 5000, 500000, 50000, step=1000)
+            employment_type = st.selectbox('Employment Type',['Private','Government','Self-employed'])
+            years_of_employment = st.number_input('Years of Employment', 0, 50, 5)
+        with cols[2]:
+            credit_score = st.number_input('Credit Score', 300, 850, 700)
+            requested_amount = st.number_input('Requested Loan (₹)', 10000, 5000000, 100000, step=10000)
+            requested_tenure = st.number_input('Tenure (months)', 3, 120, 12)
+
+        pred_type = st.radio('Prediction Type', ['Classification (Eligibility)','Regression (Max EMI)'], horizontal=True)
+        submitted = st.form_submit_button('Generate Prediction')
 
     if submitted:
         input_data = {
             'age': age, 'gender': gender, 'marital_status': marital_status,
-            'education': education, 'monthly_salary': monthly_salary,
-            'employment_type': employment_type, 'years_of_employment': years_of_employment,
-            'company_type': company_type, 'house_type': house_type, 'monthly_rent': monthly_rent,
-            'family_size': family_size, 'dependents': dependents, 'school_fees': school_fees,
-            'college_fees': college_fees, 'travel_expenses': travel_expenses, 'groceries_utilities': groceries_utilities,
-            'other_monthly_expenses': other_monthly_expenses, 'existing_loans': existing_loans,
-            'current_emi_amount': current_emi_amount, 'credit_score': credit_score, 'bank_balance': bank_balance,
-            'emergency_fund': emergency_fund, 'emi_scenario': emi_scenario, 'requested_amount': requested_amount,
-            'requested_tenure': requested_tenure
+            'monthly_salary': monthly_salary, 'employment_type': employment_type,
+            'years_of_employment': years_of_employment, 'credit_score': credit_score,
+            'requested_amount': requested_amount, 'requested_tenure': requested_tenure
         }
         input_df = pd.DataFrame([input_data])
 
-        try:
-            if pred_type == "Classification (EMI Eligibility)":
-                start_time = time.time()
-                try:
-                    prediction_arr = clf_model.predict(input_df)
-                except Exception as e:
-                    st.error(f"❌ Classification API failed: {e}")
-                    st.stop()
-                if len(prediction_arr) > 0:
-                    prediction = prediction_arr[0]
-                else:
-                    st.error("❌ Classification returned no prediction")
-                    st.stop()
-                probabilities = None
-                try:
-                    proba = clf_model.predict_proba(input_df)
-                    if hasattr(proba, "tolist"):
-                        probabilities = np.array(proba).flatten() if np.array(proba).ndim == 1 else np.array(proba)[0]
+        with st.spinner('Calling model...'):
+            try:
+                if pred_type.startswith('Classification'):
+                    if not clf_proxy.ensure_ready():
+                        st.error('Classification endpoint not available')
                     else:
-                        probabilities = np.array(proba)
-                except Exception:
-                    probabilities = None
-                inference_time = (time.time() - start_time) * 1000
-                if label_encoder:
-                    try:
-                        predicted_label = label_encoder.inverse_transform([int(prediction)])[0]
-                    except Exception:
-                        predicted_label = str(prediction)
+                        preds = clf_proxy.predict(input_df)
+                        try:
+                            proba = clf_proxy.predict_proba(input_df)
+                        except Exception:
+                            proba = None
+                        pred = preds[0] if len(preds)>0 else None
+                        label_map = {0:'Eligible',1:'High_Risk',2:'Not_Eligible'}
+                        predicted_label = label_map.get(int(pred), str(pred)) if pred is not None else 'N/A'
+                        st.success(f'Prediction: {predicted_label}')
+                        if proba is not None:
+                            probs = np.array(proba).ravel()
+                            labels = ['Eligible','High_Risk','Not_Eligible']
+                            fig = go.Figure(go.Bar(x=labels, y=probs, text=[f"{p*100:.1f}%" for p in probs], textposition='auto'))
+                            fig.update_layout(title='Class Probabilities')
+                            st.plotly_chart(fig, width='stretch')
                 else:
-                    label_map = {0: "Eligible", 1: "High_Risk", 2: "Not_Eligible"}
-                    try:
-                        predicted_label = label_map.get(int(prediction), str(prediction))
-                    except Exception:
-                        predicted_label = str(prediction)
-                st.success(f"✅ Prediction Complete in {inference_time:.0f}ms!")
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    if predicted_label == "Eligible":
-                        st.success(f"### ✅ {predicted_label}")
-                    elif predicted_label == "High_Risk":
-                        st.warning(f"### ⚠️ {predicted_label}")
+                    if not reg_proxy.ensure_ready():
+                        st.error('Regression endpoint not available')
                     else:
-                        st.error(f"### ❌ {predicted_label}")
-                with col2:
-                    if probabilities is not None and len(probabilities) > 0:
-                        confidence = float(max(probabilities)) * 100
-                        st.metric("Confidence", f"{confidence:.1f}%")
-                with col3:
-                    st.metric("Inference Time", f"{inference_time:.0f}ms")
-                if probabilities is not None and len(probabilities) > 0:
-                    st.markdown("### 📊 Prediction Probabilities")
-                    if label_encoder and hasattr(label_encoder, "classes_"):
-                        labels = label_encoder.classes_
-                    else:
-                        labels = ["Eligible", "High_Risk", "Not_Eligible"]
-                    try:
-                        probabilities = np.array(probabilities).ravel()[:len(labels)]
-                    except Exception:
-                        pass
-                    fig = go.Figure(data=[
-                        go.Bar(
-                            x=labels,
-                            y=probabilities,
-                            text=[f"{p*100:.1f}%" for p in probabilities],
-                            textposition='auto',
-                            marker_color=['#28a745' if l == predicted_label else '#6c757d' for l in labels]
-                        )
-                    ])
-                    fig.update_layout(title="Class Probabilities", yaxis=dict(range=[0, 1]), showlegend=False)
-                    st.plotly_chart(fig, use_container_width=True)
-
-            else:
-                start_time = time.time()
-                try:
-                    predicted_arr = reg_model.predict(input_df)
-                except Exception as e:
-                    st.error(f"❌ Regression API failed: {e}")
-                    st.stop()
-                if len(predicted_arr) > 0:
-                    predicted_emi = float(predicted_arr[0])
-                else:
-                    st.error("❌ Regression returned no prediction")
-                    st.stop()
-                inference_time = (time.time() - start_time) * 1000
-                st.success(f"✅ Prediction Complete in {inference_time:.0f}ms!")
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("Predicted Max EMI", f"₹{predicted_emi:,.0f}")
-                col2.metric("Total Loan", f"₹{predicted_emi * requested_tenure:,.0f}")
-                col3.metric("% of Salary", f"{(predicted_emi/monthly_salary)*100:.1f}%")
-                col4.metric("Inference Time", f"{inference_time:.0f}ms")
-
-        except Exception as e:
-            st.error(f"❌ Prediction failed: {str(e)}")
+                        preds = reg_proxy.predict(input_df)
+                        val = float(preds[0]) if len(preds)>0 else None
+                        st.success(f'Predicted Max EMI: ₹{val:,.0f}' if val is not None else 'No prediction')
+            except Exception as e:
+                st.error(f'Prediction failed: {e}')
 
 # -------------------------
-# OTHER PAGES
+# DATA EXPLORER (rich visuals)
 # -------------------------
-elif page == "📊 Data Explorer":
-    st.title("📊 Data Explorer")
-    if not data_ok:
-        st.error("❌ Dataset not loaded")
-        st.stop()
-    st.dataframe(df.head(100), use_container_width=True)
+elif page == 'Data Explorer':
+    st.title('📊 Data Explorer — Enhanced')
 
-elif page == "📈 Model Performance":
-    st.title("📈 Model Performance")
-    if metadata.get("clf_metrics"):
-        st.markdown("### 🎯 Classification Metrics")
-        metrics = metadata['clf_metrics']
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Accuracy", f"{metrics.get('test_accuracy', 0):.4f}")
-        col2.metric("F1 Score", f"{metrics.get('test_f1', 0):.4f}")
-        col3.metric("Precision", f"{metrics.get('test_precision', 0):.4f}")
-        col4.metric("Recall", f"{metrics.get('test_recall', 0):.4f}")
-    if metadata.get("reg_metrics"):
-        st.markdown("### 📊 Regression Metrics")
-        metrics = metadata['reg_metrics']
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("R² Score", f"{metrics.get('test_r2', 0):.4f}")
-        col2.metric("RMSE", f"₹{metrics.get('test_rmse', 0):,.0f}")
-        col3.metric("MAE", f"₹{metrics.get('test_mae', 0):,.0f}")
-        col4.metric("MAPE", f"{metrics.get('test_mape', 0):.1f}%")
+    if st.session_state['df'] is None:
+        with st.spinner('Loading dataset (cached)...'):
+            try:
+                df = load_csv_from_url(S3_CSV_URL)
+                st.session_state['df'] = df
+            except Exception as e:
+                st.error(f'Failed to load dataset: {e}')
+                st.stop()
+    df = st.session_state['df']
 
-elif page == "🔧 System Info":
-    st.title("🔧 System Information")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("### 🌐 MLflow")
-        st.code(f"URI: {MLFLOW_TRACKING_URI}\nStorage: S3\nCache: Local")
-        st.markdown("### 💾 Cache Status")
-        cache_path = Path(MODEL_CACHE_DIR)
-        if cache_path.exists():
-            cache_files = list(cache_path.glob("*.pkl"))
-            st.success(f"✅ {len(cache_files)} cached files")
-            total_size = sum(f.stat().st_size for f in cache_files) / (1024*1024)
-            st.metric("Total Cache Size", f"{total_size:.1f} MB")
-            if st.button("🗑️ Clear Cache"):
-                for f in cache_files:
-                    try:
-                        f.unlink()
-                    except:
-                        pass
-                st.success("Cache cleared!")
-                st.experimental_rerun()
-    with col2:
-        st.markdown("### 📊 Model Status")
-        if clf_model:
-            if getattr(clf_model, "ready", False):
-                st.success("✅ Classification endpoint reachable")
-            else:
-                st.error(f"❌ Classification endpoint not reachable: {getattr(clf_model, 'last_error', 'unknown')}")
-            if metadata.get("clf_meta"):
-                st.caption(f"v{metadata['clf_meta']['version']} - {metadata['clf_meta']['stage']}")
-        if reg_model:
-            if getattr(reg_model, "ready", False):
-                st.success("✅ Regression endpoint reachable")
-            else:
-                st.error(f"❌ Regression endpoint not reachable: {getattr(reg_model, 'last_error', 'unknown')}")
-            if metadata.get("reg_meta"):
-                st.caption(f"v{metadata['reg_meta']['version']} - {metadata['reg_meta']['stage']}")
+    st.markdown('### Dataset Quick Summary')
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric('Records', f"{len(df):,}")
+    c2.metric('Features', len(df.columns))
+    c3.metric('Missing', f"{df.isnull().sum().sum():,}")
+    mem_mb = df.memory_usage(deep=True).sum() / (1024**2)
+    c4.metric('Memory (MB)', f"{mem_mb:.1f}")
+
+    st.markdown('---')
+    # Visual selection
+    vis = st.selectbox('Choose visualization', [
+        'Feature Distribution', 'Box & Violin', 'Correlation Heatmap', 'Feature vs Target', 'Outliers (IQR)', 'Pairwise (sampled)'
+    ])
+
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    cat_cols = df.select_dtypes(include=['object','category']).columns.tolist()
+
+    if vis == 'Feature Distribution':
+        col = st.selectbox('Numeric feature', numeric_cols)
+        bins = st.slider('Bins', 10, 200, 50)
+        fig = px.histogram(df, x=col, nbins=bins, marginal='box', title=f'Distribution of {col}')
+        st.plotly_chart(fig, width='stretch')
+
+    elif vis == 'Box & Violin':
+        col = st.selectbox('Numeric feature', numeric_cols, key='bv')
+        fig = make_subplots = None
+        # display both
+        fig1 = px.box(df, y=col, points='outliers', title=f'Box plot: {col}')
+        fig2 = px.violin(df, y=col, box=True, title=f'Violin plot: {col}')
+        st.plotly_chart(fig1, width='stretch')
+        st.plotly_chart(fig2, width='stretch')
+
+    elif vis == 'Correlation Heatmap':
+        corr = df[numeric_cols].corr()
+        fig = go.Figure(data=go.Heatmap(z=corr.values, x=corr.columns, y=corr.columns, colorscale='RdBu', zmid=0))
+        fig.update_layout(title='Feature Correlation')
+        st.plotly_chart(fig, width='stretch')
+
+    elif vis == 'Feature vs Target':
+        if 'emi_eligibility' in df.columns:
+            target = 'emi_eligibility'
+        elif 'maximum_emi_amount' in df.columns:
+            target = 'maximum_emi_amount'
+        else:
+            target = st.selectbox('Select a categorical target from dataset', cat_cols)
+        feat = st.selectbox('Feature', numeric_cols)
+        if df[target].dtype == 'object' or df[target].nunique() < 10:
+            fig = px.box(df, x=target, y=feat, title=f'{feat} by {target}')
+        else:
+            fig = px.scatter(df, x=feat, y=target, trendline='ols', title=f'{feat} vs {target}')
+        st.plotly_chart(fig, width='stretch')
+
+    elif vis == 'Outliers (IQR)':
+        feat = st.selectbox('Numeric feature', numeric_cols, key='out')
+        q1 = df[feat].quantile(0.25)
+        q3 = df[feat].quantile(0.75)
+        iqr = q3 - q1
+        lower = q1 - 1.5 * iqr
+        upper = q3 + 1.5 * iqr
+        outliers = df[(df[feat] < lower) | (df[feat] > upper)]
+        st.markdown(f'**Outliers:** {len(outliers)} rows')
+        st.dataframe(outliers.head(200), width='stretch')
+        fig = px.box(df, y=feat, points='all')
+        st.plotly_chart(fig, width='stretch')
+
+    elif vis == 'Pairwise (sampled)':
+        sample = df.sample(min(1000, len(df)), random_state=42)
+        cols = st.multiselect('Select up to 4 features', numeric_cols, default=numeric_cols[:3])
+        if len(cols) >= 2:
+            fig = px.scatter_matrix(sample, dimensions=cols, color=cat_cols[0] if cat_cols else None)
+            fig.update_layout(height=700)
+            st.plotly_chart(fig, width='stretch')
+
+    st.markdown('---')
+    st.markdown('### Raw sample')
+    st.dataframe(df.head(200), width='stretch', height=300)
+
+# -------------------------
+# MODEL COMPARISON (MLflow metadata + simple charts)
+# -------------------------
+elif page == 'Model Comparison':
+    st.title('📈 Model Comparison')
+    if st.session_state['mlflow_meta'] is None:
+        with st.spinner('Fetching MLflow metadata...'):
+            st.session_state['mlflow_meta'] = fetch_mlflow_metadata()
+    meta = st.session_state['mlflow_meta']
+    if meta.get('error'):
+        st.error(f"MLflow error: {meta['error']}")
+    # Classification table
+    if meta and meta.get('clf_versions'):
+        st.subheader('Classification Models')
+        clf_df = pd.DataFrame(meta['clf_versions'])
+        # metrics explode
+        metrics = []
+        for v in meta['clf_versions']:
+            m = v.get('metrics', {})
+            metrics.append({**{'version': v['version'], 'stage': v['stage']}, **m})
+        mdf = pd.DataFrame(metrics).fillna(0)
+        st.dataframe(mdf.sort_values('version', ascending=False), width='stretch')
+        # accuracy bar
+        if 'test_accuracy' in mdf.columns:
+            fig = px.bar(mdf, x='version', y='test_accuracy', title='Classification: Test Accuracy by Version')
+            st.plotly_chart(fig, width='stretch')
+
+    if meta and meta.get('reg_versions'):
+        st.subheader('Regression Models')
+        reg_df = pd.DataFrame(meta['reg_versions'])
+        metrics = []
+        for v in meta['reg_versions']:
+            m = v.get('metrics', {})
+            metrics.append({**{'version': v['version'], 'stage': v['stage']}, **m})
+        mdf = pd.DataFrame(metrics).fillna(0)
+        st.dataframe(mdf.sort_values('version', ascending=False), width='stretch')
+        if 'test_r2' in mdf.columns:
+            fig = px.line(mdf, x='version', y='test_r2', title='Regression: Test R² by Version', markers=True)
+            st.plotly_chart(fig, width='stretch')
+
+# -------------------------
+# SYSTEM / DEBUG
+# -------------------------
+else:
+    st.title('🔧 System')
+    st.markdown('### Endpoints')
+    clf = get_class_proxy(); reg = get_reg_proxy()
+    st.write('Classification ready:', clf.ensure_ready(), 'Error:', clf.last_error)
+    st.write('Regression ready:', reg.ensure_ready(), 'Error:', reg.last_error)
+    st.markdown('---')
+    st.markdown('### MLflow metadata (cached)')
+    st.json(fetch_mlflow_metadata())
+
+# -------------------------
+# END
+# -------------------------
+
