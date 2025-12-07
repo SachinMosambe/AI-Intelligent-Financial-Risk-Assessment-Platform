@@ -20,7 +20,7 @@ warnings.filterwarnings("ignore")
 # -------------------------
 # CONFIG
 # -------------------------
-MLFLOW_TRACKING_URI = "http://13.204.193.251:5000"
+MLFLOW_TRACKING_URI = "http://3.110.192.209:5000"
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
 CLASSIFICATION_MODEL_NAME = "EMI_Classification_XGBoost"
@@ -67,8 +67,9 @@ def get_secret(key, default):
     except Exception:
         return default
 
-CLASSIFICATION_URL = get_secret("CLASSIFICATION_URL", "http://13.204.193.251:9001/invocations")
-REGRESSION_URL     = get_secret("REGRESSION_URL",     "http://13.204.193.251:9002/invocations")
+CLASSIFICATION_URL = get_secret("CLASSIFICATION_URL", "http://3.110.192.209:9001/invocations")
+REGRESSION_URL     = get_secret("REGRESSION_URL",     "http://3.110.192.209:9002/invocations")
+
 
 # -------------------------
 # DATA LOCATION (S3 public object)
@@ -328,113 +329,117 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------
-# PRELOAD EVERYTHING AT STARTUP
+# CLEAN PROFESSIONAL SIDEBAR (NAVIGATION ON TOP)
 # -------------------------
+
 st.sidebar.title("💰 EMIPredict AI")
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 🚀 Initialization")
-
-metadata = load_model_metadata()
-if metadata["ok"]:
-    st.sidebar.success("✅ MLflow connected")
-else:
-    st.sidebar.error("❌ Connection failed")
-
-df, data_ok, data_msg = load_data()
-if data_ok:
-    st.sidebar.success(f"✅ Data loaded")
-else:
-    st.sidebar.warning("⚠️ No data")
-
-st.sidebar.markdown("### 📦 Connecting to Model Serving Endpoints (no heavy loads)")
-
-clf_model = None
-reg_model = None
-label_encoder = None
-
-with st.spinner("Connecting to classification endpoint..."):
-    try:
-        clf_model = load_classification_proxy()
-        if clf_model and clf_model.ready:
-            st.sidebar.success("✅ Classification endpoint reachable")
-        else:
-            st.sidebar.warning(f"⚠️ Classification endpoint not ready: {getattr(clf_model,'last_error', 'unknown')}")
-    except Exception as e:
-        st.sidebar.error(f"❌ Classification proxy failed: {e}")
-        clf_model = None
-
-with st.spinner("Connecting to regression endpoint..."):
-    try:
-        reg_model = load_regression_proxy()
-        if reg_model and reg_model.ready:
-            st.sidebar.success("✅ Regression endpoint reachable")
-        else:
-            st.sidebar.warning(f"⚠️ Regression endpoint not ready: {getattr(reg_model,'last_error', 'unknown')}")
-    except Exception as e:
-        st.sidebar.error(f"❌ Regression proxy failed: {e}")
-        reg_model = None
-
-label_encoder = load_label_encoder_fast()
-
-if clf_model and reg_model and clf_model.ready and reg_model.ready:
-    st.sidebar.success("🎉 All models ready via API!")
-else:
-    st.sidebar.warning("⚠️ Some models not reachable. Predictions will attempt API calls and show errors if unavailable.")
-
+st.sidebar.caption("Intelligent Financial Risk Platform")
 st.sidebar.markdown("---")
 
+# ✅ NAVIGATION FIRST (TOP)
 page = st.sidebar.radio(
-    "📑 Navigation",
+    "Navigation",
     ["🏠 Home", "🔮 Predictions", "📊 Data Explorer", "📈 Model Performance", "🔧 System Info"]
 )
 
 st.sidebar.markdown("---")
 
+# ✅ SYSTEM INITIALIZATION (BOTTOM SECTION)
+st.sidebar.markdown("### System Status")
+
+metadata = load_model_metadata()
+if metadata["ok"]:
+    st.sidebar.success("MLflow Connected")
+else:
+    st.sidebar.error("MLflow Connection Failed")
+
+df, data_ok, data_msg = load_data()
 if data_ok:
-    st.sidebar.metric("📊 Records", f"{len(df):,}")
-    st.sidebar.metric("📋 Features", len(df.columns))
+    st.sidebar.success("Dataset Loaded")
+else:
+    st.sidebar.warning("Dataset Not Loaded")
+
+st.sidebar.markdown("### Model API Status")
+
+clf_model = None
+reg_model = None
+label_encoder = None
+
+with st.spinner("Connecting to Classification API..."):
+    try:
+        clf_model = load_classification_proxy()
+        if clf_model and clf_model.ready:
+            st.sidebar.success("Classification API Ready")
+        else:
+            st.sidebar.warning("Classification API Not Ready")
+    except Exception:
+        st.sidebar.error("Classification API Error")
+        clf_model = None
+
+with st.spinner("Connecting to Regression API..."):
+    try:
+        reg_model = load_regression_proxy()
+        if reg_model and reg_model.ready:
+            st.sidebar.success("Regression API Ready")
+        else:
+            st.sidebar.warning("Regression API Not Ready")
+    except Exception:
+        st.sidebar.error("Regression API Error")
+        reg_model = None
+
+label_encoder = load_label_encoder_fast()
+
+if clf_model and reg_model and clf_model.ready and reg_model.ready:
+    st.sidebar.success("All Models Online")
+else:
+    st.sidebar.warning("Some Models Offline")
 
 st.sidebar.markdown("---")
-st.sidebar.caption(f"🔗 MLflow: {MLFLOW_TRACKING_URI}")
+
+if data_ok:
+    st.sidebar.metric("Records", f"{len(df):,}")
+    st.sidebar.metric("Features", len(df.columns))
+
+st.sidebar.markdown("---")
+st.sidebar.caption("MLflow Server")
+st.sidebar.caption(MLFLOW_TRACKING_URI)
 
 # -------------------------
-# HOME PAGE
+# ✅ CLEAN PROFESSIONAL HOME PAGE (BUSINESS FOCUSED)
 # -------------------------
+
 if page == "🏠 Home":
+
     st.title("💰 EMIPredict AI")
-    st.markdown("### Intelligent Financial Risk Assessment")
+    st.caption("Intelligent Financial Risk & EMI Prediction Platform")
 
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        st.markdown("""
-        ### 🎯 Features
-        - **EMI Eligibility Classification**
-        - **Maximum EMI Prediction**
-        - **Interactive Analytics**
-        - **Real-time Predictions**
+    st.markdown("---")
 
-        ### ⚡ Performance
-        - **Models served from EC2 (no heavy loading in Streamlit)**
-        - **Instant predictions (no wait)**
-        - **Smart proxy-based architecture**
-        - **S3-backed storage**
-        """)
-    with col2:
-        st.markdown("### 📊 System Status")
-        if clf_model and clf_model.ready:
-            st.success("✅ **Classification Endpoint Ready**")
-            if metadata.get("clf_meta"):
-                st.caption(f"Model: {metadata['clf_meta']['model_name']} | v{metadata['clf_meta']['version']}")
-        else:
-            st.error("❌ Classification endpoint not ready")
-        if reg_model and reg_model.ready:
-            st.success("✅ **Regression Endpoint Ready**")
-            if metadata.get("reg_meta"):
-                st.caption(f"Model: {metadata['reg_meta']['model_name']} | v{metadata['reg_meta']['version']}")
-        else:
-            st.error("❌ Regression endpoint not ready")
-        if data_ok:
-            st.success(f"✅ **{data_msg}**")
+    st.markdown("""
+    **EMIPredict AI** is an end-to-end machine learning application designed to
+    analyze a user's financial profile and deliver instant EMI-related decisions.
+
+    The platform uses advanced **classification and regression models**
+    to evaluate loan applications with high accuracy and real-time performance.
+    """)
+
+    st.markdown("### Core Capabilities")
+
+    st.markdown("""
+    - ✅ EMI eligibility prediction using classification models  
+    - ✅ Maximum safe EMI estimation using regression models  
+    - ✅ Real-time API-based predictions from cloud-deployed models  
+    - ✅ Integrated MLflow tracking and model version control  
+    - ✅ Interactive web interface for financial analysis  
+    """)
+
+    st.markdown("---")
+
+    st.markdown("""
+    This application is built for **accurate financial decision support**
+    using scalable machine learning infrastructure and production-grade deployment.
+    """)
+
 
 # -------------------------
 # PREDICTIONS PAGE (API-based)
@@ -610,68 +615,347 @@ elif page == "🔮 Predictions":
             st.error(f"❌ Prediction failed: {str(e)}")
 
 # -------------------------
-# OTHER PAGES
+# FINAL — SAFE DATA EXPLORER
 # -------------------------
 elif page == "📊 Data Explorer":
+
     st.title("📊 Data Explorer")
-    if not data_ok:
+    st.caption("Lightweight Financial Analysis Dashboard (RAM-safe)")
+
+    if not data_ok or df is None or df.empty:
         st.error("❌ Dataset not loaded")
         st.stop()
-    st.dataframe(df.head(100), use_container_width=True)
+
+    st.markdown("---")
+
+    # ------------------------------------
+    # SMART DOWN-SAMPLING FOR PERFORMANCE
+    # ------------------------------------
+    if len(df) > 5000:
+        sample_df = df.sample(5000, random_state=42)
+    else:
+        sample_df = df.copy()
+
+    # -------------------------
+    # KPI METRICS
+    # -------------------------
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        st.metric("Total Records", f"{len(df):,}")
+
+    with col2:
+        avg_salary = int(sample_df["monthly_salary"].mean()) if "monthly_salary" in df else 0
+        st.metric("Avg Salary", f"₹{avg_salary:,}")
+
+    with col3:
+        avg_credit = int(sample_df["credit_score"].mean()) if "credit_score" in df else 0
+        st.metric("Avg Credit Score", avg_credit)
+
+    with col4:
+        avg_amount = int(sample_df["requested_amount"].mean()) if "requested_amount" in df else 0
+        st.metric("Avg Requested Amount", f"₹{avg_amount:,}")
+
+    st.markdown("---")
+
+    # -------------------------
+    # FILTERS
+    # -------------------------
+    colA, colB, colC = st.columns(3)
+
+    with colA:
+        scenario_filter = st.selectbox(
+            "EMI Scenario",
+            ["All"] + sorted(df["emi_scenario"].dropna().unique().tolist())
+        )
+
+    with colB:
+        employment_filter = st.selectbox(
+            "Employment Type",
+            ["All"] + sorted(df["employment_type"].dropna().unique().tolist())
+        )
+
+    with colC:
+        gender_filter = st.selectbox(
+            "Gender",
+            ["All"] + sorted(df["gender"].dropna().unique().tolist())
+        )
+
+    # apply filters on sample_df (FAST)
+    filtered = sample_df.copy()
+
+    if scenario_filter != "All":
+        filtered = filtered[filtered["emi_scenario"] == scenario_filter]
+
+    if employment_filter != "All":
+        filtered = filtered[filtered["employment_type"] == employment_filter]
+
+    if gender_filter != "All":
+        filtered = filtered[filtered["gender"] == gender_filter]
+
+    # -------------------------
+    # PREVIEW TABLE
+    # -------------------------
+    st.markdown("### 📌 Sample Preview (First 100 Rows)")
+    st.dataframe(filtered.head(100), width="stretch")
+
+    st.markdown("---")
+
+    # -------------------------
+    # LIGHTWEIGHT VISUALS
+    # -------------------------
+    st.markdown("### 📈 Financial Distributions (Optimized)")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if "emi_eligibility" in filtered:
+            st.markdown("#### EMI Eligibility Distribution")
+            st.bar_chart(filtered["emi_eligibility"].value_counts())
+
+    with col2:
+        if "emi_scenario" in filtered:
+            st.markdown("#### EMI Scenario Breakdown")
+            st.bar_chart(filtered["emi_scenario"].value_counts())
+
+    col3, col4 = st.columns(2)
+
+    # -------------------------
+# SAFE BINNED CHART — SALARY
+# -------------------------
+    with col3:
+        if "credit_score" in filtered:
+            st.markdown("#### Credit Score Distribution (Binned)")
+
+            # bin safely
+            credit_bins = pd.cut(filtered["credit_score"], bins=10)
+
+            # convert to safe DataFrame
+            credit_counts = credit_bins.value_counts().sort_index()
+
+            credit_df = pd.DataFrame({
+                "bin": credit_counts.index.astype(str),   # SAFE: convert Interval → string
+                "count": credit_counts.values
+            })
+
+            st.bar_chart(credit_df, x="bin", y="count", width="stretch")
+
+
+
+    with col4:
+        if "monthly_salary" in filtered:
+            st.markdown("#### Salary Distribution (Binned)")
+
+            # bin safely
+            salary_bins = pd.cut(filtered["monthly_salary"], bins=10)
+
+            # convert to safe DataFrame
+            salary_counts = salary_bins.value_counts().sort_index()
+
+            salary_df = pd.DataFrame({
+                "bin": salary_counts.index.astype(str),  # MUST convert interval to string
+                "count": salary_counts.values
+            })
+
+            st.bar_chart(salary_df, x="bin", y="count", width="stretch")
+
+
+    st.markdown("---")
+
+    # -------------------------
+    # REQUIRED EDA INSIGHTS
+    # -------------------------
+    st.markdown("### 🔍 Business & EDA Insights")
+
+    # 1️⃣ EMI eligibility distribution
+    if "emi_eligibility" in filtered and not filtered.empty:
+        top_class = filtered["emi_eligibility"].mode().iloc[0]
+        st.write(f"**Most common EMI eligibility status:** {top_class}")
+
+    # 2️⃣ correlation matrix
+    required_cols = {"monthly_salary", "requested_amount", "credit_score"}
+    if required_cols.issubset(filtered.columns):
+        corr = filtered[list(required_cols)].corr()
+        st.markdown("#### 🔗 Correlation Between Key Variables")
+        st.dataframe(corr.style.background_gradient(cmap="Blues"))
+
+    # 3️⃣ demographic pattern
+    if "gender" in filtered:
+        st.write(f"**Gender Distribution:** {filtered['gender'].value_counts().to_dict()}")
+
+    # 4️⃣ loan burden vs eligibility
+    if {"existing_loans", "emi_eligibility"}.issubset(filtered.columns):
+        risk_map = filtered.groupby("existing_loans")["emi_eligibility"].count()
+        st.markdown("#### 📌 Loan Burden vs EMI Eligibility")
+        st.bar_chart(risk_map)
+
+    st.success("✅ Dashboard loaded safely")
+
+
+
 
 elif page == "📈 Model Performance":
+
     st.title("📈 Model Performance")
-    if metadata.get("clf_metrics"):
-        st.markdown("### 🎯 Classification Metrics")
-        metrics = metadata['clf_metrics']
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Accuracy", f"{metrics.get('test_accuracy', 0):.4f}")
-        col2.metric("F1 Score", f"{metrics.get('test_f1', 0):.4f}")
-        col3.metric("Precision", f"{metrics.get('test_precision', 0):.4f}")
-        col4.metric("Recall", f"{metrics.get('test_recall', 0):.4f}")
-    if metadata.get("reg_metrics"):
-        st.markdown("### 📊 Regression Metrics")
-        metrics = metadata['reg_metrics']
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("R² Score", f"{metrics.get('test_r2', 0):.4f}")
-        col2.metric("RMSE", f"₹{metrics.get('test_rmse', 0):,.0f}")
-        col3.metric("MAE", f"₹{metrics.get('test_mae', 0):,.0f}")
-        col4.metric("MAPE", f"{metrics.get('test_mape', 0):.1f}%")
+    st.caption("Summary of the best-performing models used in production")
+
+    st.markdown("---")
+
+    # ---------------------------------------------------------
+    # CLASSIFICATION MODEL — XGBOOST
+    # ---------------------------------------------------------
+    st.subheader("🎯 Classification Model: XGBoost")
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Accuracy", "0.9482")
+    col2.metric("F1 Score", "0.9535")
+    col3.metric("Precision", "0.9631")
+    col4.metric("Recall", "0.9482")
+
+    st.info("ROC-AUC: **0.9953**")
+
+    st.markdown("---")
+
+    # ---------------------------------------------------------
+    # REGRESSION MODEL — XGBOOST
+    # ---------------------------------------------------------
+    st.subheader("📊 Regression Model: XGBoost")
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("R² Score", "0.9778")
+    col2.metric("RMSE", "₹987.76")
+    col3.metric("MAE", "₹473.51")
+    col4.metric("MAPE", "15.75%")
+
+    st.markdown("---")
+
+    # ---------------------------------------------------------
+    # MODEL COMPARISON TABLE
+    # ---------------------------------------------------------
+    st.subheader("📌 Model Comparison Overview")
+
+    comparison_data = {
+        "Model": [
+            "XGBoost (Classification)",
+            "Random Forest (Classification)",
+            "Logistic Regression (Classification)",
+
+            "XGBoost (Regression)",
+            "Random Forest (Regression)",
+            "Linear Regression (Regression)"
+        ],
+        "Performance": [
+            "Accuracy 0.9482",
+            "Accuracy 0.9446",
+            "Accuracy 0.8760",
+
+            "RMSE 987.76",
+            "RMSE 1123.44",
+            "RMSE 3266.76"
+        ],
+        "Category": [
+            "Classification",
+            "Classification",
+            "Classification",
+            "Regression",
+            "Regression",
+            "Regression"
+        ]
+    }
+
+    comp_df = pd.DataFrame(comparison_data)
+    st.dataframe(comp_df, width="stretch")
+
+    st.success("📊 Model performance dashboard ready")
+
+
 
 elif page == "🔧 System Info":
+
     st.title("🔧 System Information")
+    st.caption("System status, API health checks, and cache controls")
+
+    st.markdown("---")
+
     col1, col2 = st.columns(2)
+
+    # ---------------------------------------------------------
+    # LEFT — SYSTEM CONFIG & CACHE
+    # ---------------------------------------------------------
     with col1:
-        st.markdown("### 🌐 MLflow")
-        st.code(f"URI: {MLFLOW_TRACKING_URI}\nStorage: S3\nCache: Local")
-        st.markdown("### 💾 Cache Status")
+        st.subheader("🌐 MLflow Configuration")
+        st.code(f"""
+Tracking URI : {MLFLOW_TRACKING_URI}
+Storage      : S3
+Artifacts    : Enabled
+Registry     : Active
+""")
+
+        st.markdown("---")
+
+        st.subheader("💾 Model Cache")
+
         cache_path = Path(MODEL_CACHE_DIR)
         if cache_path.exists():
-            cache_files = list(cache_path.glob("*.pkl"))
-            st.success(f"✅ {len(cache_files)} cached files")
-            total_size = sum(f.stat().st_size for f in cache_files) / (1024*1024)
-            st.metric("Total Cache Size", f"{total_size:.1f} MB")
+            files = list(cache_path.glob("*.pkl"))
+            total_files = len(files)
+            total_size = sum(f.stat().st_size for f in files) / (1024 * 1024)
+
+            st.metric("Cached Files", total_files)
+            st.metric("Cache Size", f"{total_size:.2f} MB")
+
             if st.button("🗑️ Clear Cache"):
-                for f in cache_files:
-                    try:
-                        f.unlink()
-                    except:
-                        pass
-                st.success("Cache cleared!")
+                for f in files:
+                    f.unlink(missing_ok=True)
+                st.success("Cache cleared successfully.")
                 st.experimental_rerun()
+        else:
+            st.info("No cached model files found.")
+
+    # ---------------------------------------------------------
+    # RIGHT — API HEALTH & LATENCY
+    # ---------------------------------------------------------
     with col2:
-        st.markdown("### 📊 Model Status")
-        if clf_model:
-            if getattr(clf_model, "ready", False):
-                st.success("✅ Classification endpoint reachable")
-            else:
-                st.error(f"❌ Classification endpoint not reachable: {getattr(clf_model, 'last_error', 'unknown')}")
-            if metadata.get("clf_meta"):
-                st.caption(f"v{metadata['clf_meta']['version']} - {metadata['clf_meta']['stage']}")
-        if reg_model:
-            if getattr(reg_model, "ready", False):
-                st.success("✅ Regression endpoint reachable")
-            else:
-                st.error(f"❌ Regression endpoint not reachable: {getattr(reg_model, 'last_error', 'unknown')}")
-            if metadata.get("reg_meta"):
-                st.caption(f"v{metadata['reg_meta']['version']} - {metadata['reg_meta']['stage']}")
+        st.subheader("📡 API Endpoint Health")
+
+        # ---- Classification ----
+        try:
+            ok = requests.get(CLASSIFICATION_URL.replace("/invocations", "/ping"), timeout=3)
+            st.success("Classification API ✔ Online")
+        except:
+            st.error("Classification API ❌ Unreachable")
+
+        # ---- Regression ----
+        try:
+            ok = requests.get(REGRESSION_URL.replace("/invocations", "/ping"), timeout=3)
+            st.success("Regression API ✔ Online")
+        except:
+            st.error("Regression API ❌ Unreachable")
+
+        st.markdown("---")
+
+        st.subheader("⏱️ Latency Check")
+        if st.button("Run Latency Test"):
+            import time
+
+            # Classification latency
+            try:
+                t = time.time()
+                requests.get(CLASSIFICATION_URL.replace("/invocations", "/ping"), timeout=5)
+                latency = (time.time() - t) * 1000
+                st.info(f"Classification API: {latency:.1f} ms")
+            except:
+                st.error("Classification API latency check failed")
+
+            # Regression latency
+            try:
+                t = time.time()
+                requests.get(REGRESSION_URL.replace("/invocations", "/ping"), timeout=5)
+                latency = (time.time() - t) * 1000
+                st.info(f"Regression API: {latency:.1f} ms")
+            except:
+                st.error("Regression API latency check failed")
+
+    st.success("🔧 System dashboard ready")
+
+

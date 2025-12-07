@@ -1,0 +1,1 @@
+app link: https://ai-intelligent-financial-risk-assessment-platform-czkhsixzenyn.streamlit.app/
