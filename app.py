@@ -1,5 +1,4 @@
-# app_s3_mlflow_fast.py
-# EMIPredict AI - API-based lightweight client for Streamlit Cloud
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -20,7 +19,7 @@ warnings.filterwarnings("ignore")
 # -------------------------
 # CONFIG
 # -------------------------
-MLFLOW_TRACKING_URI = "http://3.110.192.209:5000"
+MLFLOW_TRACKING_URI = "http://13.205.1.225:5000"
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
 CLASSIFICATION_MODEL_NAME = "EMI_Classification_XGBoost"
